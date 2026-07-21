@@ -32,7 +32,7 @@ void hex_to_rgba(const char *hex, float *c) {
 }
 
 uint32_t clean_mask(uint32_t m) {
-	return m & ~(WLR_MODIFIER_CAPS) &
+	return m & ~(uint32_t)WLR_MODIFIER_CAPS &
 		(WLR_MODIFIER_SHIFT | WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT |
 		 WLR_MODIFIER_MOD2 | WLR_MODIFIER_MOD3 | WLR_MODIFIER_LOGO |
 		 WLR_MODIFIER_MOD5);
