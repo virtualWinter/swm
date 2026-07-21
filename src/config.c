@@ -199,6 +199,7 @@ static char **cmd_argv(char *s) {
 		if (!*p) break;
 		size_t len = 0;
 		char *tok = malloc(strlen(p) + 1);
+		if (!tok) goto fail;
 		int inq = 0;
 		while (*p && (inq || !isspace((unsigned char)*p))) {
 			if (*p == '"') { inq = !inq; p++; continue; }
@@ -207,13 +208,23 @@ static char **cmd_argv(char *s) {
 		tok[len] = 0;
 		if (n == cap) {
 			cap = cap ? cap * 2 : 4;
-			argv = realloc(argv, cap * sizeof(char *));
+			char **new_argv = realloc(argv, cap * sizeof(char *));
+			if (!new_argv) { free(tok); goto fail; }
+			argv = new_argv;
 		}
 		argv[n++] = tok;
 	}
-	if (n == cap) argv = realloc(argv, (n + 1) * sizeof(char *));
-	argv[n] = NULL;
+	{
+		char **new_argv = realloc(argv, (n + 1) * sizeof(char *));
+		if (new_argv) argv = new_argv;
+	}
+	if (argv) argv[n] = NULL;
 	return argv;
+
+fail:
+	for (size_t i = 0; i < n; i++) free(argv[i]);
+	free(argv);
+	return NULL;
 }
 
 /* right = "<action> [args]"; fill k->function and k->arg. Returns 1 on success. */
@@ -253,8 +264,14 @@ static int parse_action(char *right, key *k) {
 }
 
 static void add_key(key k) {
-	if (nkeys % 16 == 0)
-		keys = realloc(keys, (nkeys + 16) * sizeof(key));
+	if (nkeys % 16 == 0) {
+		key *new_keys = realloc(keys, (nkeys + 16) * sizeof(key));
+		if (!new_keys) {
+			fprintf(stderr, "swm: failed to allocate keybindings\n");
+			return;
+		}
+		keys = new_keys;
+	}
 	keys[nkeys++] = k;
 }
 
