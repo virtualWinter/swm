@@ -351,10 +351,19 @@ static void parse_string(const char *s) {
 }
 
 static void parse_stream(FILE *f) {
-	char buf[1024];
+	char buf[4096];
 	int section = SECTION_BINDINGS;
-	while (fgets(buf, sizeof buf, f))
+	while (fgets(buf, sizeof buf, f)) {
+		size_t len = strlen(buf);
+		/* If the line doesn't end with newline it was truncated; skip it. */
+		if (len > 0 && buf[len - 1] != '\n') {
+			fprintf(stderr, "swm: config line too long, skipping\n");
+			int c;
+			while ((c = fgetc(f)) != EOF && c != '\n');
+			continue;
+		}
 		parse_line(buf, &section);
+	}
 }
 
 static void write_default_config(const char *path) {
