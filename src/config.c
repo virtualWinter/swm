@@ -403,3 +403,20 @@ void load_config(void) {
 		parse_string(DEFAULT_CONFIG);
 	}
 }
+
+#ifdef TESTING
+/* Expose the static parser for unit tests so we can feed arbitrary config
+ * strings and verify the resulting keybinding table and settings. */
+void test_parse_string(const char *s) { parse_string(s); }
+void test_reset_state(void) {
+	border_width = 1;
+	gap_size = 0;
+	config_mod = WLR_MODIFIER_LOGO;
+	nkeys = 0;
+}
+int  test_nkeys(void) { return (int)nkeys; }
+key *test_keys(void)  { return keys; }
+int  test_border_width(void) { return border_width; }
+int  test_gap(void) { return gap_size; }
+uint32_t test_config_mod(void) { return config_mod; }
+#endif

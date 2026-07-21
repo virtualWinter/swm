@@ -51,6 +51,7 @@ void run(const Arg arg) {
 
 /* ----- main ----- */
 
+#ifndef TESTING
 int main(int argc, char *argv[]) {
 	(void)argc; (void)argv;
 
@@ -133,3 +134,4 @@ int main(int argc, char *argv[]) {
 	wl_display_destroy(server.display);
 	return 0;
 }
+#endif
