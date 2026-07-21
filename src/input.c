@@ -64,9 +64,11 @@ void new_input(struct wl_listener *l, void *data) {
 		struct xkb_rule_names rules = { .rules = "evdev", .model = "pc105", .layout = "us" };
 		km = xkb_keymap_new_from_names(ctx, &rules, XKB_KEYMAP_COMPILE_NO_FLAGS);
 	}
-		wlr_keyboard_set_keymap(kb, km);
+		if (km) {
+			wlr_keyboard_set_keymap(kb, km);
+			xkb_keymap_unref(km);
+		}
 		wlr_keyboard_set_repeat_info(kb, 25, 600);
-		if (km) xkb_keymap_unref(km);
 		xkb_context_unref(ctx);
 
 		server.keyboard = kb;
