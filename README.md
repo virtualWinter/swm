@@ -78,9 +78,23 @@ On first run, `swm` creates this file with sensible defaults, so you always
 have a template to edit. Changes take effect after restarting `swm` (there is
 no live reload).
 
-Lines are `key = value` directives; `#` starts a comment.
+The file is organized into sections:
 
-### Tunables
+```
+[settings]
+mod = SUPER
+border_width = 1
+gap = 0
+border_normal = #333333
+border_select = #c831dc
+
+[bindings]
+<MODS>+<KEY> = <action> [args]
+```
+
+`#` starts a comment.
+
+### Settings
 
 | Setting         | Meaning                                                   | Default     |
 |-----------------|-----------------------------------------------------------|-------------|
@@ -121,12 +135,15 @@ Binding syntax:
 ### Example
 
 ```ini
-mod = SUPER
+[settings]
 
+mod = SUPER
 border_width = 2
 gap = 0
 border_normal = #333333
 border_select = #880000
+
+[bindings]
 
 SUPER+q        = kill
 SUPER+c        = center

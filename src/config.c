@@ -6,13 +6,18 @@
 // border colors/width, gap, and the full keybinding table) is user-editable
 // without recompiling.
 //
-// Config syntax (one directive per line, '#' starts a comment):
+// Config syntax:
+//
+//   [settings]
 //   mod = SUPER                     # primary modifier for the MOD alias
 //   border_width = 1
 //   gap = 0
 //   border_normal = #333333
 //   border_select = #c831dc
+//
+//   [bindings]
 //   <MODS>+<KEY> = <action> [args]
+//
 // Actions: kill, center, fullscreen, next, prev,
 //          workspace <n>, send <n>, exec <cmd...>
 
@@ -34,38 +39,43 @@ uint32_t config_mod = WLR_MODIFIER_LOGO;
 key *keys = NULL;
 size_t nkeys = 0;
 
-/* Default configuration, written on first run and used as a fallback if the
- * user's config fails to parse any bindings. */
+/* Default configuration, written on first run. */
 static const char *DEFAULT_CONFIG =
-"# swm configuration -- edit and reload by restarting swm\n"
+"# swm configuration\n"
 "# Modifiers: SUPER (Logo/Windows), ALT, SHIFT, CTRL, or MOD (primary mod)\n"
-"# Bindings: <MODS>+<KEY> = <action> [args]\n"
 "# Actions: kill, center, fullscreen, next, prev, workspace <n>, send <n>, exec <cmd...>\n"
 "\n"
-"mod = SUPER\n"
+"[settings]\n"
 "\n"
+"mod = SUPER\n"
 "border_width = 1\n"
 "gap = 0\n"
 "border_normal = #333333\n"
 "border_select = #c831dc\n"
 "\n"
+"[bindings]\n"
+"\n"
+"# Window ops\n"
 "SUPER+q = kill\n"
 "SUPER+c = center\n"
 "SUPER+f = fullscreen\n"
 "ALT+Tab = next\n"
 "ALT+SHIFT+Tab = prev\n"
 "\n"
+"# Launchers\n"
 "SUPER+d = exec srun\n"
 "SUPER+w = exec bud /home/vwinter/Wallpapers\n"
 "SUPER+p = exec scr\n"
 "SUPER+Return = exec st\n"
 "\n"
+"# Media keys\n"
 "XF86AudioLowerVolume = exec amixer sset Master 5%-\n"
 "XF86AudioRaiseVolume = exec amixer sset Master 5%+\n"
 "XF86AudioMute = exec amixer sset Master toggle\n"
 "XF86MonBrightnessUp = exec bri 10 +\n"
 "XF86MonBrightnessDown = exec bri 10 -\n"
 "\n"
+"# Workspaces\n"
 "SUPER+1 = workspace 1\n"
 "SUPER+SHIFT+1 = send 1\n"
 "SUPER+2 = workspace 2\n"
@@ -250,38 +260,23 @@ static void add_key(key k) {
 
 /* ----- line parsing ----- */
 
-static void parse_line(char *line) {
-	char *hash = strchr(line, '#');
-	if (hash) *hash = 0;
-	char *eq = strchr(line, '=');
-	if (!eq) return;
-	*eq = 0;
-	char *left = trim(line);
-	char *right = trim(eq + 1);
-	if (!*left || !*right) return;
-
+static void parse_setting(char *left, char *right) {
 	if (!strcmp(left, "mod")) {
 		config_mod = parse_mod_spec(right);
-		return;
-	}
-	if (!strcmp(left, "border_width") || !strcmp(left, "borderwidth")) {
+	} else if (!strcmp(left, "border_width") || !strcmp(left, "borderwidth")) {
 		border_width = atoi(right);
-		return;
-	}
-	if (!strcmp(left, "gap")) {
+	} else if (!strcmp(left, "gap")) {
 		gap_size = atoi(right);
-		return;
-	}
-	if (!strcmp(left, "border_normal") || !strcmp(left, "bordernormal")) {
+	} else if (!strcmp(left, "border_normal") || !strcmp(left, "bordernormal")) {
 		hex_to_rgba(right, normal_rgba);
-		return;
-	}
-	if (!strcmp(left, "border_select") || !strcmp(left, "borderselect")) {
+	} else if (!strcmp(left, "border_select") || !strcmp(left, "borderselect")) {
 		hex_to_rgba(right, focus_rgba);
-		return;
+	} else {
+		fprintf(stderr, "swm: unknown setting: %s\n", left);
 	}
+}
 
-	/* Otherwise it's a keybinding. */
+static void parse_binding_line(char *left, char *right) {
 	key k = {0};
 	if (parse_binding(left, &k) && parse_action(right, &k))
 		add_key(k);
@@ -289,19 +284,60 @@ static void parse_line(char *line) {
 		fprintf(stderr, "swm: ignoring bad binding: %s = %s\n", left, right);
 }
 
+/* Section context for organizing the config file. */
+enum { SECTION_NONE, SECTION_SETTINGS, SECTION_BINDINGS };
+
+/* Parse one line, updating *section when a [section] header is seen. */
+static void parse_line(char *line, int *section) {
+	/* Strip comments */
+	char *hash = strchr(line, '#');
+	if (hash) *hash = 0;
+
+	char *trimmed = trim(line);
+	if (!*trimmed) return;
+
+	/* Section headers */
+	if (*trimmed == '[') {
+		char *end = strchr(trimmed, ']');
+		if (!end) return;
+		*end = 0;
+		char *name = trim(trimmed + 1);
+		if (!strcasecmp(name, "settings"))
+			*section = SECTION_SETTINGS;
+		else if (!strcasecmp(name, "bindings"))
+			*section = SECTION_BINDINGS;
+		return;
+	}
+
+	char *eq = strchr(trimmed, '=');
+	if (!eq) return;
+	*eq = 0;
+	char *left = trim(trimmed);
+	char *right = trim(eq + 1);
+	if (!*left || !*right) return;
+
+	if (*section == SECTION_SETTINGS) {
+		parse_setting(left, right);
+	} else {
+		parse_binding_line(left, right);
+	}
+}
+
 static void parse_string(const char *s) {
 	char *buf = strdup(s);
 	char *save = NULL;
+	int section = SECTION_BINDINGS;
 	for (char *line = strtok_r(buf, "\n", &save); line;
 	     line = strtok_r(NULL, "\n", &save))
-		parse_line(line);
+		parse_line(line, &section);
 	free(buf);
 }
 
 static void parse_stream(FILE *f) {
 	char buf[1024];
+	int section = SECTION_BINDINGS;
 	while (fgets(buf, sizeof buf, f))
-		parse_line(buf);
+		parse_line(buf, &section);
 }
 
 static void write_default_config(const char *path) {
