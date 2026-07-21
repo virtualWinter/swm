@@ -18,6 +18,7 @@ struct wlr_output *output_for_client(client *c) {
 	struct wlr_output *o = wlr_output_layout_output_at(server.output_layout,
 		c->x + c->w / 2, c->y + c->h / 2);
 	if (!o) o = server.last_output;
+	if (!o) o = wlr_output_layout_get_center_output(server.output_layout);
 	return o;
 }
 
@@ -90,15 +91,19 @@ void client_set_fullscreen(client *c, bool fs) {
 
 void win_fs(const Arg arg) {
 	(void)arg;
-	if (server.cur) client_set_fullscreen(server.cur, !server.cur->fs);
+	if (!server.cur) return;
+	struct wlr_output *o = output_for_client(server.cur);
+	if (!o) return;
+	client_set_fullscreen(server.cur, !server.cur->fs);
 }
 
 void win_center(const Arg arg) {
 	(void)arg;
 	if (!server.cur) return;
 	client *c = server.cur;
-	struct wlr_box ob;
 	struct wlr_output *o = output_for_client(c);
+	if (!o) return;
+	struct wlr_box ob;
 	wlr_output_layout_get_box(server.output_layout, o, &ob);
 	c->x = ob.x + (ob.width - c->w) / 2;
 	c->y = ob.y + (ob.height - c->h) / 2;
