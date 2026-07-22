@@ -18,6 +18,8 @@ XDG config directory (no recompiling needed).
 - Fullscreen toggle (with an optional top gap for a status bar)
 - Center / kill / alt-tab window cycling
 - Key-launched programs
+- Background wallpaper image (PNG, JPEG, etc.) — point to a file or a directory
+  (a random image is chosen each session)
 - Fully runtime-editable configuration via XDG
 
 ## Dependencies
@@ -104,6 +106,7 @@ border_select = #c831dc
 |                 | windows shrink by this amount so the bar stays visible    |             |
 | `border_normal` | Border color of unfocused windows (hex)                   | `#333333`   |
 | `border_select` | Border color of the focused window (hex)                  | `#880000`   |
+| `wallpaper`     | Path to a background image, or a directory (random pick)   | *(none)*    |
 
 ### Keybindings
 

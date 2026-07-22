@@ -18,6 +18,39 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
+#include <sys/inotify.h>
+#include <limits.h>
+#include <libgen.h>
+#include <string.h>
+
+#ifndef TESTING
+/* Signal-safe event-loop callback for config reload (SIGUSR1). */
+static int on_reload_signal(int signum, void *data) {
+	(void)signum; (void)data;
+	fprintf(stderr, "swm: reload triggered (SIGUSR1)\n");
+	reload_all();
+	return 1;
+}
+
+/* Event-loop callback — fires when the config file changes on disk. */
+static int on_config_modified(int fd, uint32_t mask, void *data) {
+	(void)data;
+	if (!(mask & WL_EVENT_READABLE)) return 1;
+	char buf[4096];
+	struct inotify_event *ev;
+	ssize_t n = read(fd, buf, sizeof buf);
+	if (n <= 0) return 1;
+	for (char *p = buf; p < buf + n; p += sizeof *ev + ev->len) {
+		ev = (struct inotify_event *)p;
+		if ((ev->mask & IN_CLOSE_WRITE) && !strcmp(ev->name, "swm.conf")) {
+			fprintf(stderr, "swm: config file changed, reloading\n");
+			reload_settings();
+			break;
+		}
+	}
+	return 1;
+}
+#endif
 
 /* Global state. */
 struct server server;
@@ -53,13 +86,62 @@ void run(const Arg arg) {
 
 #ifndef TESTING
 int main(int argc, char *argv[]) {
-	(void)argc; (void)argv;
+	/* Parse flags before anything else. */
+	int nested_mode = 0;
+	const char *socket_name = NULL;
+	for (int i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "--nested") || !strcmp(argv[i], "-n")) {
+			nested_mode = 1;
+		} else if (!strcmp(argv[i], "--socket") || !strcmp(argv[i], "-s")) {
+			if (i + 1 < argc) socket_name = argv[++i];
+		} else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+			printf("Usage: swm [--nested|-n] [--socket|-s NAME]\n");
+			printf("  --nested / -n    Run as a nested compositor (Wayland backend)\n");
+			printf("  --socket / -s    Set the Wayland display socket name\n");
+			return 0;
+		}
+	}
 
 	signal(SIGCHLD, SIG_IGN);
+
+	if (nested_mode) {
+		setenv("WLR_BACKEND", "wayland", 1);
+		/* Let wlroots auto-detect the best renderer for the Wayland backend. */
+		if (!getenv("WLR_WL_OUTPUTS"))
+			setenv("WLR_WL_OUTPUTS", "1", 0);
+	}
 
 	load_config();
 
 	server.display = wl_display_create();
+
+#ifndef TESTING
+	/* Register SIGUSR1 handler for runtime config reload. */
+	struct wl_event_loop *loop = wl_display_get_event_loop(server.display);
+	wl_event_loop_add_signal(loop, SIGUSR1, on_reload_signal, NULL);
+
+	/* Write PID file so srun (or any tool) can signal us. */
+	FILE *pf = fopen("/tmp/swm.pid", "w");
+	if (pf) { fprintf(pf, "%d\n", getpid()); fclose(pf); }
+
+	/* Watch the config directory for changes with inotify. */
+	char *cfg_path = config_file_path();
+	if (cfg_path) {
+		char cfg_dir[PATH_MAX];
+		snprintf(cfg_dir, sizeof cfg_dir, "%s", cfg_path);
+		char *dn = dirname(cfg_dir);
+		int inot_fd = inotify_init1(IN_CLOEXEC);
+		if (inot_fd >= 0) {
+			if (inotify_add_watch(inot_fd, dn, IN_CLOSE_WRITE) >= 0)
+				wl_event_loop_add_fd(loop, inot_fd, WL_EVENT_READABLE,
+					on_config_modified, NULL);
+			else
+				close(inot_fd);
+		}
+		free(cfg_path);
+	}
+#endif
+
 	server.backend = wlr_backend_autocreate(
 		wl_display_get_event_loop(server.display), NULL);
 	if (!server.backend) {
@@ -78,7 +160,7 @@ int main(int argc, char *argv[]) {
 		server.scene, server.output_layout);
 
 	server.xdg_shell = wlr_xdg_shell_create(server.display, 6);
-	wlr_compositor_create(server.display, 1, server.renderer);
+	wlr_compositor_create(server.display, 5, server.renderer);
 
 	server.seat = wlr_seat_create(server.display, "seat0");
 	server.cursor = wlr_cursor_create();
@@ -114,14 +196,41 @@ int main(int argc, char *argv[]) {
 	server.request_cursor.notify = seat_request_cursor;
 	wl_signal_add(&server.seat->events.request_set_cursor, &server.request_cursor);
 
+	wallpaper_init();
+
 	wlr_seat_set_capabilities(server.seat, WL_SEAT_CAPABILITY_POINTER);
 
-	const char *socket = wl_display_add_socket_auto(server.display);
-	if (!socket) {
-		fprintf(stderr, "swm: failed to create wayland socket\n");
-		return 1;
+	/* Save the parent display before we override WAYLAND_DISPLAY. */
+	const char *parent_display = getenv("WAYLAND_DISPLAY");
+
+	const char *socket;
+	if (socket_name) {
+		if (wl_display_add_socket(server.display, socket_name) < 0) {
+			fprintf(stderr, "swm: failed to create socket %s\n", socket_name);
+			return 1;
+		}
+		socket = socket_name;
+	} else {
+		/* Temporarily clear WAYLAND_DISPLAY so auto-pick doesn't try the
+		 * parent's name. wl_display_add_socket_auto will setenv the new name. */
+		unsetenv("WAYLAND_DISPLAY");
+		socket = wl_display_add_socket_auto(server.display);
+		if (!socket) {
+			fprintf(stderr, "swm: failed to create wayland socket\n");
+			return 1;
+		}
 	}
-	printf("swm: running on WAYLAND_DISPLAY=%s\n", socket);
+	/* Publish our socket name so child processes connect to us.
+	 * (wl_display_add_socket_auto already did setenv, but for the explicit
+	 * socket_name path we do it here.) */
+	if (socket_name)
+		setenv("WAYLAND_DISPLAY", socket_name, 1);
+
+	printf("swm: running on WAYLAND_DISPLAY=%s%s%s%s\n",
+		socket,
+		nested_mode && parent_display ? " (parent: " : "",
+		nested_mode && parent_display ? parent_display : "",
+		nested_mode && parent_display ? ")" : "");
 
 	if (!wlr_backend_start(server.backend)) {
 		fprintf(stderr, "swm: failed to start backend\n");
@@ -129,6 +238,13 @@ int main(int argc, char *argv[]) {
 	}
 
 	wl_display_run(server.display);
+
+#ifndef TESTING
+	/* Clean up PID file. */
+	unlink("/tmp/swm.pid");
+#endif
+
+	wallpaper_finish();
 
 	wlr_scene_node_destroy(&server.scene->tree.node);
 	wl_display_destroy(server.display);

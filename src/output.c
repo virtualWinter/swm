@@ -8,6 +8,8 @@
 void output_destroy_handler(struct wl_listener *l, void *data) {
 	(void)data;
 	struct swm_output *o = wl_container_of(l, o, destroy);
+	/* Tear down the wallpaper node for this output. */
+	wallpaper_teardown_output(o->output);
 	/* Detach our frame listener before wlroots finishes the output, otherwise
 	 * wlr_output_finish() aborts on the non-empty frame listener list. */
 	wl_list_remove(&o->frame.link);
@@ -53,6 +55,9 @@ void new_output(struct wl_listener *l, void *data) {
 	wl_signal_add(&output->events.frame, &o->frame);
 	o->destroy.notify = output_destroy_handler;
 	wl_signal_add(&output->events.destroy, &o->destroy);
+
+	/* Set up a wallpaper scene buffer for this output. */
+	wallpaper_setup_output(output);
 
 	server.last_output = output;
 }

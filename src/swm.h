@@ -102,10 +102,15 @@ struct server {
 extern struct server server;
 extern float normal_rgba[4], focus_rgba[4];
 
+/* Wallpaper scene resources. */
+extern struct wlr_buffer *wallpaper_buffer;
+extern struct wlr_scene_tree *wallpaper_tree;
+
 /* Runtime config (loaded from the XDG config file by load_config()). */
 extern int border_width;
 extern int gap_size;
 extern uint32_t config_mod;
+extern char *wallpaper_path;
 
 /* Keybinding table, built by load_config() in config.c. */
 extern key *keys;
@@ -113,6 +118,20 @@ extern size_t nkeys;
 
 /* config.c */
 void load_config(void);
+char *config_file_path(void);  /* full path to swm.conf (caller frees) */
+void reload_all(void);          /* full reload: settings + keybindings (SIGUSR1) */
+void reload_settings(void);     /* re-read [settings] only (no keybinding changes) */
+void apply_runtime_settings(void);  /* apply visual changes to clients/outputs */
+
+/* wallpaper.c */
+void wallpaper_init(void);
+void wallpaper_finish(void);
+void wallpaper_load(const char *path);
+void wallpaper_setup_output(struct wlr_output *output);
+void wallpaper_teardown_output(struct wlr_output *output);
+void wallpaper_update_output_layout(void);
+void wallpaper_update_all_outputs(void);
+char *pick_random_from_dir(const char *path);
 
 /* main.c */
 void hex_to_rgba(const char *hex, float *c);

@@ -28,7 +28,7 @@ BEFORE=$(ls /run/user/"$(id -u)"/wayland-*.lock 2>/dev/null || true)
 
 echo "  launching swm nested..."
 
-WLR_BACKENDS=wayland WAYLAND_DISPLAY=wayland-0 "$BINARY" >/dev/null 2>&1 &
+WLR_BACKEND=wayland env -u WAYLAND_DISPLAY "$BINARY" >/dev/null 2>&1 &
 SWM_PID=$!
 
 # Wait for swm to create its socket.

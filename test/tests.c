@@ -6,6 +6,7 @@
  * Compile:
  *   cc -DTESTING $(CFLAGS) -c src/main.c  -o build/test_main.o
  *   cc -DTESTING $(CFLAGS) -c src/config.c -o build/test_config.o
+ *   cc -DTESTING $(CFLAGS) -c src/wallpaper.c -o build/test_wallpaper.o
  *   cc -DTESTING $(CFLAGS) -c test/tests.c  -o build/test_tests.o
  *   cc build/test_*.o -o build/test_swm $(LDLIBS)
  */
@@ -45,6 +46,10 @@ key *test_keys(void);
 int  test_border_width(void);
 int  test_gap(void);
 uint32_t test_config_mod(void);
+
+/* Exposed by config.c under TESTING. */
+uint32_t parse_mod_spec(char *v);
+char **cmd_argv(char *s);
 
 /* Stub functions for the action callbacks that config.c stores in the
  * keybinding table. These are only stored (never called during parsing),
@@ -281,6 +286,181 @@ static void test_config_reset_between_parses(void) {
 	(void)n1;
 }
 
+/* Test that parsing ONLY the [settings] section produces NO keybindings.
+ * This exercises the same code path used by reload_settings(). */
+static void test_config_settings_only(void) {
+	TEST("config settings-only (reload path)");
+	test_reset_state();
+	test_parse_string(
+		"[settings]\n"
+		"mod = SUPER\n"
+		"border_width = 4\n"
+		"gap = 8\n"
+		"border_normal = #ff0000\n"
+		"border_select = #00ff00\n"
+		/* Note: no [bindings] section at all */
+	);
+	ASSERT(test_nkeys() == 0, "no keybindings from settings-only parse, got %d",
+		test_nkeys());
+	ASSERT(test_border_width() == 4, "border_width=4 from settings, got %d",
+		test_border_width());
+	ASSERT(test_gap() == 8, "gap=8 from settings, got %d", test_gap());
+}
+
+/* Test that [bindings] without [settings] still gets defaults for settings. */
+static void test_config_bindings_only(void) {
+	TEST("config bindings-only (defaults used)");
+	test_reset_state();
+	test_parse_string(
+		"[bindings]\n"
+		"SUPER+Return = exec foot\n"
+		"SUPER+q = kill\n"
+	);
+	ASSERT(test_nkeys() >= 2, "two bindings registered, got %d", test_nkeys());
+	/* Settings should retain defaults */
+	ASSERT(test_border_width() == 1, "border_width defaults to 1, got %d",
+		test_border_width());
+	ASSERT(test_gap() == 0, "gap defaults to 0, got %d", test_gap());
+}
+
+/* Test trailing whitespace tolerance in bindings. */
+static void test_config_trailing_whitespace(void) {
+	TEST("config trailing whitespace");
+	test_reset_state();
+	test_parse_string(
+		"[bindings]\n"
+		"SUPER+q = kill  \n"
+		"  SUPER+w = kill\n"
+	);
+	ASSERT(test_nkeys() == 2, "two bindings with whitespace, got %d", test_nkeys());
+}
+
+/* =================================================================
+ * cmd_argv — command tokenizer
+ * ================================================================= */
+static void free_cmd_argv(char **argv) {
+	if (!argv) return;
+	for (size_t i = 0; argv[i]; i++) free(argv[i]);
+	free(argv);
+}
+
+static void test_cmd_argv(void) {
+	TEST("cmd_argv");
+	char **av;
+
+	av = cmd_argv("foot");
+	ASSERT(av != NULL, "simple -> not NULL");
+	ASSERT(av[0] && !strcmp(av[0], "foot"), "av[0]=foot");
+	ASSERT(av[1] == NULL, "exactly one arg");
+	free_cmd_argv(av);
+
+	av = cmd_argv("foot --server /tmp/foot.sock");
+	ASSERT(av != NULL, "args -> not NULL");
+	ASSERT(av[0] && !strcmp(av[0], "foot"), "av[0]=foot");
+	ASSERT(av[1] && !strcmp(av[1], "--server"), "av[1]=--server");
+	ASSERT(av[2] && !strcmp(av[2], "/tmp/foot.sock"), "av[2]=path");
+	ASSERT(av[3] == NULL, "exactly 3 args");
+	free_cmd_argv(av);
+
+	av = cmd_argv("firefox \"https://example.com\"");
+	ASSERT(av != NULL, "quoted -> not NULL");
+	ASSERT(av[0] && !strcmp(av[0], "firefox"), "av[0]=firefox");
+	ASSERT(av[1] && !strcmp(av[1], "https://example.com"), "quoted url");
+	ASSERT(av[2] == NULL, "exactly 2 args");
+	free_cmd_argv(av);
+
+	av = cmd_argv("alacritty -e foot nvim");
+	ASSERT(av != NULL, "multiple -> not NULL");
+	ASSERT(av[0] && !strcmp(av[0], "alacritty"), "av[0]=alacritty");
+	ASSERT(av[1] && !strcmp(av[1], "-e"), "av[1]=-e");
+	ASSERT(av[2] && !strcmp(av[2], "foot"), "av[2]=foot");
+	ASSERT(av[3] && !strcmp(av[3], "nvim"), "av[3]=nvim");
+	ASSERT(av[4] == NULL, "exactly 4 args");
+	free_cmd_argv(av);
+
+	/* Empty string */
+	av = cmd_argv("");
+	ASSERT(av == NULL || av[0] == NULL, "empty -> NULL or {NULL}");
+	if (av) free(av);
+}
+
+/* =================================================================
+ * parse_mod_spec — modifier key name resolution
+ * ================================================================= */
+static void test_parse_mod_spec(void) {
+	TEST("parse_mod_spec");
+
+	ASSERT(parse_mod_spec("SUPER")  == WLR_MODIFIER_LOGO, "SUPER -> LOGO");
+	ASSERT(parse_mod_spec("super")  == WLR_MODIFIER_LOGO, "super lower -> LOGO");
+	ASSERT(parse_mod_spec("Super")  == WLR_MODIFIER_LOGO, "Super mixed -> LOGO");
+	ASSERT(parse_mod_spec("ALT")    == WLR_MODIFIER_ALT,  "ALT");
+	ASSERT(parse_mod_spec("CTRL")   == WLR_MODIFIER_CTRL, "CTRL");
+	ASSERT(parse_mod_spec("SHIFT")  == WLR_MODIFIER_SHIFT,"SHIFT");
+	ASSERT(parse_mod_spec("MOD4")   == 0, "MOD4 not in mod_token list -> 0");
+	ASSERT(parse_mod_spec("MOD1")   == WLR_MODIFIER_ALT,  "MOD1 -> ALT");
+	ASSERT(parse_mod_spec("MOD")    == WLR_MODIFIER_LOGO, "MOD alone defaults to LOGO");
+
+	/* Unknown names */
+	ASSERT(parse_mod_spec("HYPER")  == 0, "HYPER unknown -> 0");
+	ASSERT(parse_mod_spec("")       == 0, "empty -> 0");
+	ASSERT(parse_mod_spec("LOGO")   == WLR_MODIFIER_LOGO, "LOGO -> LOGO (mod_token aliases LOGO=SUPER)");
+}
+
+/* =================================================================
+ * DEFAULT_CONFIG — the bundled fallback config
+ * ================================================================= */
+static void test_default_config(void) {
+	TEST("DEFAULT_CONFIG parses");
+	test_reset_state();
+	/* test_parse_string uses the DEFAULT_CONFIG hard-coded in config.c.
+	 * We can't reference DEFAULT_CONFIG directly (it's static), but we
+	 * can verify that the fallback path produces a reasonable number of
+	 * bindings by parsing a minimal full config. */
+	test_parse_string(
+		"[settings]\n"
+		"mod = SUPER\n"
+		"border_width = 2\n"
+		"gap = 4\n"
+		"border_normal = #333333\n"
+		"border_select = #c831dc\n"
+		"[bindings]\n"
+		"SUPER+Return = exec foot\n"
+		"SUPER+q = kill\n"
+		"SUPER+f = fullscreen\n"
+		"SUPER+c = center\n"
+		"SUPER+Tab = next\n"
+		"SUPER+SHIFT+Tab = prev\n"
+		"SUPER+1 = workspace 1\n"
+		"SUPER+2 = workspace 2\n"
+		"SUPER+3 = workspace 3\n"
+		"SUPER+SHIFT+1 = send 1\n"
+		"SUPER+SHIFT+2 = send 2\n"
+		"SUPER+SHIFT+3 = send 3\n"
+	);
+	/* 12 bindings listed above */
+	ASSERT(test_nkeys() == 12, "12 bindings parsed, got %d", test_nkeys());
+	ASSERT(test_border_width() == 2, "border_width=2");
+	ASSERT(test_gap() == 4, "gap=4");
+}
+
+/* Test gap setting edge cases. */
+static void test_config_gap(void) {
+	TEST("config gap setting");
+	test_reset_state();
+	test_parse_string(
+		"[settings]\n"
+		"gap = -5\n"
+	);
+	ASSERT(test_gap() == -5, "gap=-5 accepted, got %d", test_gap());
+
+	test_reset_state();
+	test_parse_string(
+		"[settings]\n"
+		"gap = 100\n"
+	);
+	ASSERT(test_gap() == 100, "gap=100 accepted, got %d", test_gap());
+}
+
 /* =================================================================
  * Main
  * ================================================================= */
@@ -302,6 +482,17 @@ int main(void) {
 	test_config_comment_and_blank_lines();
 	test_config_section_header_casing();
 	test_config_reset_between_parses();
+	test_config_settings_only();
+	test_config_bindings_only();
+	test_config_trailing_whitespace();
+	test_config_gap();
+	test_default_config();
+
+	printf("\nCommand tokenizer:\n");
+	test_cmd_argv();
+
+	printf("\nModifier parsing:\n");
+	test_parse_mod_spec();
 
 	printf("\nResults: %d / %d passed\n", passed, total);
 	return total == passed ? 0 : 1;

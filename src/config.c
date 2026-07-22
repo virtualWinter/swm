@@ -36,6 +36,7 @@
 int border_width = 1;
 int gap_size = 0;
 uint32_t config_mod = WLR_MODIFIER_LOGO;
+char *wallpaper_path = NULL;
 key *keys = NULL;
 size_t nkeys = 0;
 
@@ -52,6 +53,11 @@ static const char *DEFAULT_CONFIG =
 "gap = 0\n"
 "border_normal = #333333\n"
 "border_select = #c831dc\n"
+"# Path to a wallpaper image or a directory of images (a random one is picked each start).\n"
+"# Leave empty for no wallpaper (the compositor background shows through).\n"
+"# wallpaper = /path/to/wallpaper.png\n"
+"# wallpaper = /path/to/wallpaper/dir\n"
+"wallpaper = \n"
 "\n"
 "[bindings]\n"
 "\n"
@@ -116,7 +122,7 @@ static void mkdir_p(const char *path) {
 
 /* Resolve the config file path under XDG, creating the directory. Caller
  * frees the result. */
-static char *config_file_path(void) {
+char *config_file_path(void) {
 	const char *xdg = getenv("XDG_CONFIG_HOME");
 	const char *home = getenv("HOME");
 	char *base;
@@ -156,7 +162,11 @@ static int mod_token(const char *t, uint32_t *m) {
 	return 0;
 }
 
+#ifdef TESTING
+uint32_t parse_mod_spec(char *v) {
+#else
 static uint32_t parse_mod_spec(char *v) {
+#endif
 	uint32_t mask = 0;
 	char *save = NULL;
 	for (char *tok = strtok_r(v, "+ \t", &save); tok;
@@ -190,7 +200,11 @@ static int parse_binding(char *left, key *k) {
 
 /* Split the remainder of an exec command into a NULL-terminated argv,
  * honoring double quotes. Caller frees via the returned pointer. */
+#ifdef TESTING
+char **cmd_argv(char *s) {
+#else
 static char **cmd_argv(char *s) {
+#endif
 	char **argv = NULL;
 	size_t n = 0, cap = 0;
 	char *p = s;
@@ -288,6 +302,9 @@ static void parse_setting(char *left, char *right) {
 		hex_to_rgba(right, normal_rgba);
 	} else if (!strcmp(left, "border_select") || !strcmp(left, "borderselect")) {
 		hex_to_rgba(right, focus_rgba);
+	} else if (!strcmp(left, "wallpaper")) {
+		free(wallpaper_path);
+		wallpaper_path = strdup(right);
 	} else {
 		fprintf(stderr, "swm: unknown setting: %s\n", left);
 	}
@@ -380,6 +397,7 @@ void load_config(void) {
 	border_width = 1;
 	gap_size = 0;
 	config_mod = WLR_MODIFIER_LOGO;
+	free(wallpaper_path); wallpaper_path = NULL;
 	hex_to_rgba("#333333", normal_rgba);
 	hex_to_rgba("#c831dc", focus_rgba);
 
@@ -404,6 +422,112 @@ void load_config(void) {
 	}
 }
 
+#ifndef TESTING
+/* =================================================================
+ * Runtime reload (SIGUSR1) — re-reads only the [settings] section
+ * and applies visual changes without touching keybindings.
+ * Available only in the real compositor (not the test harness).
+ * ================================================================= */
+
+void reload_settings(void) {
+	/* Save old wallpaper path to detect changes. */
+	char *old_wallpaper = wallpaper_path ? strdup(wallpaper_path) : NULL;
+
+	/* Reset to defaults for the settings we can reload. */
+	int  old_bw  = border_width;
+	int  old_gap = gap_size;
+	free(wallpaper_path); wallpaper_path = NULL;
+	hex_to_rgba("#333333", normal_rgba);
+	hex_to_rgba("#c831dc", focus_rgba);
+
+	/* Re-read [settings] from the config file. */
+	char *path = config_file_path();
+	FILE *f = fopen(path, "r");
+	if (f) {
+		char buf[4096];
+		int section = SECTION_BINDINGS;
+		while (fgets(buf, sizeof buf, f)) {
+			size_t len = strlen(buf);
+			if (len > 0 && buf[len - 1] != '\n') {
+				int c;
+				while ((c = fgetc(f)) != EOF && c != '\n');
+				continue;
+			}
+			parse_line(buf, &section);
+		}
+		fclose(f);
+	} else {
+		/* If the file is gone, keep old values. */
+		border_width   = old_bw;
+		gap_size       = old_gap;
+		wallpaper_path = old_wallpaper ? strdup(old_wallpaper) : NULL;
+		free(old_wallpaper);
+		old_wallpaper = NULL;
+	}
+	free(path);
+
+	printf("swm: config reloaded\n");
+
+	apply_runtime_settings();
+
+	free(old_wallpaper);
+}
+
+void apply_runtime_settings(void) {
+	/* Update all client borders with new colours and dimensions. */
+	for (int ws = 0; ws < NUM_WS; ws++) {
+		client *c;
+		wl_list_for_each(c, &server.ws_clients[ws], link) {
+			if (!c->mapped) continue;
+			wlr_scene_rect_set_color(c->border,
+				c == server.cur ? focus_rgba : normal_rgba);
+			client_arrange(c);   /* applies new border_width */
+		}
+	}
+
+	/* Re-load wallpaper if the path changed or is now set. */
+	if (wallpaper_path && *wallpaper_path) {
+		char *chosen = pick_random_from_dir(wallpaper_path);
+		if (chosen) {
+			wallpaper_load(chosen);
+			free(chosen);
+		} else {
+			wallpaper_load(wallpaper_path);
+		}
+		wallpaper_update_all_outputs();
+	} else if (wallpaper_buffer) {
+		/* Wallpaper setting cleared — remove it. */
+		wlr_buffer_drop(wallpaper_buffer);
+		wallpaper_buffer = NULL;
+		wallpaper_update_all_outputs();
+		fprintf(stderr, "swm: wallpaper unloaded\n");
+	}
+}
+
+/* Free all allocated keybinding data (exec argvs). */
+static void free_keys(void) {
+	for (size_t i = 0; i < nkeys; i++) {
+		if (keys[i].function == run && keys[i].arg.com) {
+			for (const char **p = keys[i].arg.com; *p; p++)
+				free((void *)*p);
+			free((void *)keys[i].arg.com);
+		}
+	}
+	free(keys);
+	keys = NULL;
+	nkeys = 0;
+}
+
+/* Full runtime reload: re-read settings AND keybindings from disk,
+ * then apply visual changes.  Called from the SIGUSR1 handler. */
+void reload_all(void) {
+	free_keys();
+	load_config();
+	apply_runtime_settings();
+	fprintf(stderr, "swm: full config reloaded (settings + keybindings)\n");
+}
+#endif /* !TESTING — runtime reload stubs end */
+
 #ifdef TESTING
 /* Expose the static parser for unit tests so we can feed arbitrary config
  * strings and verify the resulting keybinding table and settings. */
@@ -412,6 +536,7 @@ void test_reset_state(void) {
 	border_width = 1;
 	gap_size = 0;
 	config_mod = WLR_MODIFIER_LOGO;
+	free(wallpaper_path); wallpaper_path = NULL;
 	nkeys = 0;
 }
 int  test_nkeys(void) { return (int)nkeys; }

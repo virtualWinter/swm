@@ -40,6 +40,11 @@ clean:
 run: all
 	$(TARGET)
 
+# Run swm nested inside the current Wayland session.
+# Requires a working parent compositor on WAYLAND_DISPLAY.
+run-nested: all
+	WLR_BACKEND=wayland $(TARGET) --socket dev-nest
+
 install: $(TARGET)
 	install -Dm755 $(TARGET) $(BINDIR)/swm
 
