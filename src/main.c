@@ -18,17 +18,42 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <sys/inotify.h>
 #include <limits.h>
 #include <libgen.h>
 #include <string.h>
 
 #ifndef TESTING
-/* Signal-safe event-loop callback for config reload (SIGUSR1). */
+/* Signal-safe event-loop callback for config reload (SIGUSR1).
+ * To mitigate spurious reloads we check the file's mtime first:
+ * if the config hasn't changed since the last load, the signal is
+ * ignored.  This prevents unnecessary parsing from accidental or
+ * malicious SIGUSR1 (any same-UID process can send signals). */
+static time_t last_load_mtime = 0;
+
 static int on_reload_signal(int signum, void *data) {
 	(void)signum; (void)data;
+	/* Check whether the config file has actually changed. */
+	char *path = config_file_path();
+	if (path) {
+		struct stat st;
+		if (stat(path, &st) == 0 && st.st_mtime <= last_load_mtime) {
+			free(path);
+			return 1;  /* unchanged, ignore */
+		}
+		free(path);
+	}
 	fprintf(stderr, "swm: reload triggered (SIGUSR1)\n");
 	reload_all();
+	/* Update mtime so subsequent signals before a real write are no-ops. */
+	path = config_file_path();
+	if (path) {
+		struct stat st;
+		if (stat(path, &st) == 0) last_load_mtime = st.st_mtime;
+		free(path);
+	}
 	return 1;
 }
 
