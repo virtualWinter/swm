@@ -118,16 +118,20 @@ void win_kill(const Arg arg) {
 void win_next(const Arg arg) {
 	(void)arg;
 	if (!server.cur) return;
-	client *n = wl_container_of(server.cur->link.next, (struct client *)0, link);
-	if (n == server.cur) return;
+	/* Guard against wrapping to the list head anchor. */
+	struct wl_list *next = server.cur->link.next;
+	if (next == &server.ws_clients[server.cur->ws]) return;
+	client *n = wl_container_of(next, n, link);
 	client_focus(n);
 }
 
 void win_prev(const Arg arg) {
 	(void)arg;
 	if (!server.cur) return;
-	client *n = wl_container_of(server.cur->link.prev, (struct client *)0, link);
-	if (n == server.cur) return;
+	/* Guard against wrapping to the list head anchor. */
+	struct wl_list *prev = server.cur->link.prev;
+	if (prev == &server.ws_clients[server.cur->ws]) return;
+	client *n = wl_container_of(prev, n, link);
 	client_focus(n);
 }
 
