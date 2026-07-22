@@ -14,6 +14,7 @@
 #include <strings.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/random.h>
 #include <time.h>
 #include <unistd.h>
 #include <drm_fourcc.h>
@@ -200,8 +201,17 @@ struct wlr_scene_tree *wallpaper_tree = NULL;
 static struct wl_listener wallpaper_layout_change;
 
 void wallpaper_init(void) {
-	/* Seed the RNG for random wallpaper picking. */
-	srand((unsigned)time(NULL) ^ (unsigned)getpid());
+	/* Seed the RNG for random wallpaper picking.
+	 * Use getrandom() (Linux ≥3.17) for a non-deterministic seed.
+	 * Fall back to time+pid if unavailable. */
+#if defined(__linux__)
+	unsigned int seed = 0;
+	if (getrandom(&seed, sizeof seed, 0) != (ssize_t)sizeof seed)
+		seed = (unsigned)time(NULL) ^ (unsigned)getpid();
+#else
+	unsigned int seed = (unsigned)time(NULL) ^ (unsigned)getpid();
+#endif
+	srand(seed);
 
 	/* Create the wallpaper scene tree behind the window tree. */
 	wallpaper_tree = wlr_scene_tree_create(&server.scene->tree);
