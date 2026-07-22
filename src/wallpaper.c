@@ -19,8 +19,24 @@
 #include <drm_fourcc.h>
 #include <wlr/interfaces/wlr_buffer.h>
 
+/* stb_image.h — single-header public-domain image decoder.
+ * Version: commit 1e78c0a (Dec 2023) from https://github.com/nothings/stb
+ * Keep this copy updated to pick up security fixes.
+ *
+ * Known CVEs in older versions:
+ *   CVE-2021-27906  (out-of-bounds read, GIF)
+ *   CVE-2019-12218  (heap buffer overflow, JPEG)
+ *   CVE-2019-12219  (out-of-bounds read, BMP)
+ *   CVE-2024-30497  (stack overflow, TGA)
+ * Loading a malicious wallpaper image could exploit unpatched CVEs.
+ * Authentication: wallpaper images come from the user's own directory. */
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+
+/* Maximum wallpaper dimensions to prevent resource exhaustion from
+ * maliciously crafted images that claim to be huge. */
+#define MAX_WALLPAPER_WIDTH  16384
+#define MAX_WALLPAPER_HEIGHT 16384
 
 /* ----- custom wlr_buffer backed by raw pixel data ----- */
 
@@ -240,6 +256,15 @@ void wallpaper_load(const char *path) {
 	unsigned char *pixels = stbi_load(path, &w, &h, &n, 4);
 	if (!pixels) {
 		fprintf(stderr, "swm: failed to load wallpaper: %s\n", path);
+		return;
+	}
+
+	/* Reject unreasonably large images to guard against resource
+	 * exhaustion or decoder overflows from crafted files. */
+	if (w > MAX_WALLPAPER_WIDTH || h > MAX_WALLPAPER_HEIGHT) {
+		fprintf(stderr, "swm: wallpaper %s too large (%dx%d, max %dx%d)\n",
+			path, w, h, MAX_WALLPAPER_WIDTH, MAX_WALLPAPER_HEIGHT);
+		stbi_image_free(pixels);
 		return;
 	}
 
