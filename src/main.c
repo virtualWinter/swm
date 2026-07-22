@@ -120,9 +120,18 @@ int main(int argc, char *argv[]) {
 	struct wl_event_loop *loop = wl_display_get_event_loop(server.display);
 	wl_event_loop_add_signal(loop, SIGUSR1, on_reload_signal, NULL);
 
-	/* Write PID file so srun (or any tool) can signal us. */
-	FILE *pf = fopen("/tmp/swm.pid", "w");
-	if (pf) { fprintf(pf, "%d\n", getpid()); fclose(pf); }
+	/* Write PID file so srun (or any tool) can signal us.
+	 * Use XDG_RUNTIME_DIR (user-owned, not world-writable) to
+	 * prevent symlink attacks on /tmp/. */
+	const char *rt_dir = getenv("XDG_RUNTIME_DIR");
+	if (rt_dir && *rt_dir) {
+		char pid_path[PATH_MAX];
+		snprintf(pid_path, sizeof pid_path, "%s/swm.pid", rt_dir);
+		FILE *pf = fopen(pid_path, "w");
+		if (pf) { fprintf(pf, "%d\n", getpid()); fclose(pf); }
+	} else {
+		fprintf(stderr, "swm: XDG_RUNTIME_DIR not set, skipping PID file\n");
+	}
 
 	/* Watch the config directory for changes with inotify. */
 	char *cfg_path = config_file_path();
@@ -241,7 +250,14 @@ int main(int argc, char *argv[]) {
 
 #ifndef TESTING
 	/* Clean up PID file. */
-	unlink("/tmp/swm.pid");
+	{
+		const char *rt_dir = getenv("XDG_RUNTIME_DIR");
+		if (rt_dir && *rt_dir) {
+			char pid_path[PATH_MAX];
+			snprintf(pid_path, sizeof pid_path, "%s/swm.pid", rt_dir);
+			unlink(pid_path);
+		}
+	}
 #endif
 
 	wallpaper_finish();
